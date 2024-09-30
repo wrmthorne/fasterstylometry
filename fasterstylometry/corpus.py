@@ -1,16 +1,17 @@
+from glob import glob
 import logging
+import os
+import re
 from uuid import uuid4
 
 import polars as pl
 
 from fasterstylometry.tokenization import tokenise_remove_pronouns_en
+from fasterstylometry.utils import META_COLS
 
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
-
-
-META_COLS = ['index', 'authors', 'books', 'texts', 'tokens']
 
 
 class Corpus:
@@ -29,7 +30,7 @@ class Corpus:
             }
         )
         self._top_token_freqs = None
-        self.z_scores = None
+        self._z_scores = None
 
 
     def tokenise(
@@ -143,7 +144,6 @@ class Corpus:
 
         return normalized.join(stats, how='cross')
     
-    @property
     def z_scores(
         self,
         vocab_size: int = 500,
@@ -158,17 +158,24 @@ class Corpus:
             vocab_size: The number of top tokens to consider.
             words_to_exclude: A set of words to exclude from the top K tokens.
             tok_match_pattern: A regex pattern to match top K tokens.
-            force_recalculate: If True, the cached stats will be ignored and recalculated.
+            force_recalculate: If True, the cached stats will be ignored and
+                recalculated.
+
+        Returns:
+            A DataFrame with the z-scores for the top K tokens in the corpus
+                and the metadata columns (index, authors, books).
         '''
-        if self.z_scores is not None and not force_recalculate:
-            return self.z_scores
+        if self._z_scores is not None and not force_recalculate:
+            return self._z_scores
 
         if 'tokens' not in self.df.columns or force_recalculate:
-            logger.info('Corpus was not manually tokenised. Now tokenising with the default tokeniser.')
+            if not force_recalculate:
+                logger.info('Corpus was not manually tokenised. Now '
+                            'tokenising with the default tokeniser.')
+            
             # Clear cached stats
-            self.top_token_freqs = None
-            self.z_scores = None
-
+            self._top_token_freqs = None
+            self._z_scores = None
             self.tokenise()
 
         self.top_token_freqs(
@@ -178,51 +185,53 @@ class Corpus:
         )
 
         self._calculate_token_counts_by_row()
-        self._calculate_z_scores()
+        self._z_scores = self._calculate_z_scores()
 
         # Return everything except the text and the tokens
         return self.df.select(
             pl.all().exclude(['texts', 'tokens'])
         )
-
-
-    def calculate_burrows_delta(
-            self,
-            test_corpus: 'Corpus',
-            vocab_size: int = 500,
-            words_to_exclude: set = {},
-            tok_match_pattern: str = r'^[a-z][a-z]+$'
-        ) -> pl.DataFrame:
     
-        # TODO: Turn calculation into a pipeline
-        
-
-        # Calculate self z-scores
-        self._calculate_token_counts_by_row()
-
-        if 'tokens' not in test_corpus.df.columns:
-            logger.info('Test corpus was not manually tokenised. Now tokenising with the default tokeniser.')
-            test_corpus.tokenise()
-
-        # Set top_k tokens
-        test_corpus.top_token_freqs = \
-            self.top_token_freqs(
-                k=vocab_size,
-                words_to_exclude=words_to_exclude,
-                tok_match_pattern=tok_match_pattern
-            )
-        
-        # Calculate test z-scores
-        test_corpus._calculate_token_counts_by_row()
-        test_corpus._calculate_z_scores()
-
-        # Calculate Burrows' Delta
-        burrows_delta = (
-            self.df
-            .join(test_corpus.df, how='cross')
-            .with_columns([
-                (pl.col(f'df1.{col}') - pl.col(f'df2.{col}')).alias(col)
-                for col in [col for col in self.df.columns if col not in ['index', 'authors', 'books', 'texts', 'tokens']]
-            ])
+    @classmethod
+    def from_dataframe(cls, df: pl.DataFrame):
+        '''Creates a Corpus object from a polars DataFrame.'''
+        return cls(
+            authors=df['authors'].to_list(),
+            books=df['books'].to_list(),
+            texts=df['texts'].to_list()
         )
+    
+    @classmethod
+    def from_dir(cls, path: str) -> 'Corpus':
+        '''Creates a Corpus object from a directory of text files. Expects
+        files to have a name in the format <author>_-_<title>.txt. The files
+        may be in nested directories.
+
+        Args:
+            path: The path to the directory containing the text files.
+
+        Returns:
+            A Corpus object.
+        '''
+        if not os.path.exists(path):
+            raise FileNotFoundError(f'Path {path} does not exist.')
+        
+        text_files = glob(os.path.join(path, '**/*.txt'), recursive=True)
+
+        authors = []
+        books = []
+        texts = []
+
+        for filename in text_files:
+            if (matched_filename := re.match(r'.*\/(?P<author>.*)_-_(?P<title>.*)\.txt', filename)):
+                author, book = matched_filename.groupdict().values()
+                authors.append(author)
+                books.append(book)
+
+                with open(filename, 'r') as f:
+                    texts.append(f.read())
+
+        return cls(authors=authors, books=books, texts=texts)
+
+
 
