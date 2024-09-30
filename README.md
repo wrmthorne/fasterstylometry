@@ -1,9 +1,14 @@
 # Faster Stylometry
 
 <!-- badges: start -->
+
 ![my badge](https://badgen.net/badge/Status/In%20Development/orange)
 
-The faster and more memory conscious implementation of [Fast Stylometry](https://github.com/fastdatascience/faststylometry/tree/main) Wood, T. A. (2024) for calculating the Burrows Delta Metric for stylistic similarity analysis and author attribution.
+[![PyPI package](https://img.shields.io/badge/pip%20install-fasterstylometry-brightgreen)](https://pypi.org/project/fasterstylometry/) [![version number](https://img.shields.io/pypi/v/fasterstylometry?color=green&label=version)](https://github.com/wrmthorne/fasterdatascience/releases) [![License](https://img.shields.io/github/license/wrmthorne/fasterstylometry)](https://github.com/wrmthorne/fasterstylometry/blob/main/LICENSE)
+
+<!-- badges: end -->
+
+The faster and more memory conscious implementation of [Fast Stylometry](https://github.com/fastdatascience/faststylometry/tree/main) Wood, T. A. (2024) for calculating the Burrows Delta Metric for stylistic similarity analysis and author attribution. The API is inspired by the original library but major refactoring was done to move responsibility for relevant calculations to the corpus. Additionally, everything has been rewritten to run in almost pure Polars.
 
 The metric measures the distance between a text's token frequency distribution and a set of reference texts' token frequency distributions. Smaller deltas indicate a higher stylistic similarity.
 
@@ -24,7 +29,7 @@ where $n$ is the number of words in the feature space, $z_i^{\text{target}}$ is 
 **This library is a bit of fun and is in no way meant to demean or offend the authors of Fast Stylometry**.
 I have gotten good use out of the library but I needed something faster and more scalable for my current work.
 
-### Installation
+## Installation
 
 The library can be installed through PyPi. There are optionally `dev` and `all` builds to install the testing libraries and the libraries used for one off/small scale experimentation respectively.
 
@@ -33,9 +38,68 @@ The library can be installed through PyPi. There are optionally `dev` and `all` 
 pip install fasterstylometry # Optionally [dev] or [all]
 ```
 
-### Tokenising
+## Corpus
 
-The `Corpus` class exposes a `tokenise` method. A default tokeniser will be used if none are supplied. The default tokeniser is a polars reimplementation of the `tokenise_remove_pronouns_en` from the original FastStylometry package which removes english pronouns, removes apostrophes and splits words using `\w+`.
+### Loading a Corpus
+
+The `Corpus` is the main entry point to the library. It holds the collection of authors, titles and texts and maintains all the logic for tokenising and calculating the relevant statistics. There are a number of ways to instantiate a `Corpus` object, the first and simplest is as any normal class would be instantiated. A `Corpus` may also be instantiated from an existing dataframe of the correct format.
+
+```python
+# Basic iinstantiatoin
+corpus = Corpus(
+    authors = ['Hermann Melville', 'Jane Austen', 'Philip K. Dick']
+    books = ['Moby Dick', 'Pride and Prejudice', 'Do Androids Dream of Electric Sheep']
+    texts = ['Call me Ishmael ...', 'It is a truth universally ...', 'A merry little surge of ...']
+)
+
+# From existing polars dataframe of correct format
+corpus = Corpus.from_dataframe(df)
+```
+
+Finally, in the same way as Fast Stylometry, a `Corpus` may be loaded from a collection of text files in a directory. Directories may be nested or flat but the filenames must be of the format `[author]_-_[title].txt` where the contents of the file is only the book text.
+
+```python
+corpus = Corpus.from_dir('path/to/dir/')
+```
+
+### Using the Corpus
+
+Most of the methods for the `Corpus` are intentionally protected as they are performed in a particular sequence to calculate z-values. A `Corpus` is intended to be passed to the Delta class to perform the stylometry. The main method of interest is `tokenise` which is described in greater detail below. Even after instantiating a  `Corpus` internal statistics won't be calculated as they are implemented as lazy operations in Polars. This allows the computational graph to be as optimised as possible before starting processing. Only once the `z_score` method is called will the majority of calculations be poerformed. These are then cached in the `Corpus` so it may be reused without repeating the expense.
+
+```python
+from fasterstylometry import BurrowsDelta, Corpus
+
+# Instantiate train and test corpora
+train_corpus = ...
+test_corpus = ...
+
+delta = BurrowsDelta(
+    train_corpus = train_corpus,
+
+    # Optional Parameters
+    test_corpus = test_corpus,
+    vocab_size = 500,
+    words_to_exclude = {},
+    tok_match_pattern: str = r'^[a-z][a-z]+$'
+)
+
+# TODO: Returns the full matrix with all delta permutations
+diff_matrix = delta.calculate_burrows_delta()
+
+# TODO: Add example
+
+# TODO: Returns the delta values between each test document and an aggregate#
+# z-score for each author in the train corpus
+delta.author_deltas
+
+# TODO: Add example
+```
+
+The library is setup to potentially accommodate other delta metrics in the future but this may never happen.
+
+## Tokenising
+
+The `Corpus` class exposes a `tokenise` method. A default tokeniser will be used if no updated tokeniser is provided. The default tokeniser is a polars reimplementation of the `tokenise_remove_pronouns_en` from the original FastStylometry package which removes english pronouns, removes apostrophes and splits words using `\w+`.
 
 To submit a callable as the tokenise function, your function must accept a `str` and return a `list[str]`. The text field for each row will be passed to the method one at a time until the full series has been processed.
 
@@ -70,7 +134,7 @@ tokenise_remove_pronouns_en = (
 ```
 
 
-### Running Tests
+## Running Tests
 
 To run the tests, make sure the `dev` dependencies are installed as described above. To run the tests, use the following command:
 
@@ -78,15 +142,16 @@ To run the tests, make sure the `dev` dependencies are installed as described ab
 # LOL You think I have written any tests yet
 ```
 
-### References
+## References
 
 Wood, T. A. (2024). Fast Stylometry (Computer software) (Version 1.0.4) [Computer software]. https://doi.org/10.5281/zenodo.11096941
 
 
-### TODO
+## TODO
 - [ ] add parquet caching for large datasets that exceed memory
 - [ ] Fix lazy evaluation of dataframes
 - [ ] Unit tests
+- [ ] Add 
 - [ ] Finish README
 - [ ] CI/CD
 - [ ] Setup on PyPi

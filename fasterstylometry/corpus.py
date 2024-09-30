@@ -204,7 +204,7 @@ class Corpus:
     @classmethod
     def from_dir(cls, path: str) -> 'Corpus':
         '''Creates a Corpus object from a directory of text files. Expects
-        files to have a name in the format <author>_-_<title>.txt. The files
+        files to have a name in the format [author]_-_[title].txt. The files
         may be in nested directories.
 
         Args:

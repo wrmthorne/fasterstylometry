@@ -1,0 +1,5 @@
+site_name: Faster Stylometry
+
+theme:
+  name: readthedocs
+  highlightjs: true
