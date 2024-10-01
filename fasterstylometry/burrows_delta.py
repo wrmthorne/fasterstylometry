@@ -1,9 +1,10 @@
 import logging
 
 import polars as pl
+import polars.selectors as cs
 
-from fasterstylometry import Corpus
-from fasterstylometry.utils import META_COLS
+from .corpus import Corpus
+from .utils import META_COLS
 
 
 logger = logging.getLogger(__name__)
@@ -18,11 +19,15 @@ class BurrowsDelta:
     
     Args:
         train_corpus (Corpus): The source corpus.
-        test_corpus (Corpus): The reference corpus.'''
+        test_corpus (Corpus): The reference corpus.
+        vocab_size (int): The size of the vocabulary to use in the analysis.
+        words_to_exclude (set): A set of words to exclude from the analysis.
+        tok_match_pattern (str): A regular expression pattern to match tokens.
+    '''
     def __init__(
         self,
         train_corpus: Corpus,
-        test_corpus: Corpus = None,
+        test_corpus: Corpus,
         vocab_size: int = 500,
         words_to_exclude: set = {},
         tok_match_pattern: str = r'^[a-z][a-z]+$'
@@ -32,50 +37,58 @@ class BurrowsDelta:
         self.vocab_size = vocab_size
         self.words_to_exclude = words_to_exclude
         self.tok_match_pattern = tok_match_pattern
-        
-        
-    def calculate_burrows_delta(
-        self,
-        test_corpus: Corpus = None,
-        vocab_size: int = None,
-        words_to_exclude: set = None,
-        tok_match_pattern: str = None,
-        force_recalculate: bool = False
-    ) -> pl.DataFrame:
 
-        if test_corpus is not None and self.test_corpus is not None:
-            logger.warning('New test corpus provided. Overwriting existing '
-                           'test corpus.')
-            self.test_corpus = test_corpus
-        elif test_corpus is None and self.test_corpus is None:
-            raise ValueError('A test corpus must be provided to calculate the '
-                             'Burrows\' Delta.')
+        self._document_deltas = None
 
-        # Calculate train z-scores 
-        train_z_scores = self.train_corpus.z_scores(
-            vocab_size=vocab_size or self.vocab_size,
-            words_to_exclude=words_to_exclude or self.words_to_exclude,
-            tok_match_pattern=tok_match_pattern or self.tok_match_pattern,
-            force_recalculate=force_recalculate
+    def _calculate_burrows_delta(self):
+        '''Protected method to calculate the Burrows' Delta across the provided
+        source and reference corpora.'''
+
+        self.test_corpus.top_k_tokens = self.train_corpus.top_k_tokens
+
+        common_tokens = list(
+            set(self.train_corpus.z_scores.columns)
+            .intersection(self.test_corpus.z_scores.columns)
+            .difference({'index', 'authors', 'titles'})
+        )
+        
+        result = (
+            self.train_corpus.z_scores
+            .select(['index', 'authors', 'titles', *common_tokens])
+            .join(
+                self.test_corpus.z_scores.select(['index', 'authors', 'titles', *common_tokens]),
+                how='cross',
+                suffix='_test'
+            )
         )
 
-        # Set top_k tokens
-        test_corpus.top_token_freqs = self.train_corpus.top_token_freqs
-
-        # Calculate test z-scores
-        test_z_scores = test_corpus.z_scores(
-            vocab_size=vocab_size or self.vocab_size,
-            words_to_exclude=words_to_exclude or self.words_to_exclude,
-            tok_match_pattern=tok_match_pattern or self.tok_match_pattern,
-            force_recalculate=force_recalculate
-        )
-
-        # Calculate Burrows' Delta
-        burrows_delta = (
-            self.df
-            .join(test_corpus.df, how='cross')
+        return (
+            result
             .with_columns([
-                (pl.col(f'df1.{col}') - pl.col(f'df2.{col}')).alias(col)
-                for col in [col for col in self.df.columns if col not in META_COLS]
+                (pl.col(token) - pl.col(f'{token}_test')).abs().alias(f'delta_{token}')
+                for token in common_tokens
             ])
+            .with_columns([
+                pl.mean_horizontal(pl.col('^delta_.*$')).alias('burrows_delta')
+            ])
+            .select([
+                'index', 'authors', 'titles', 'index_test', 'authors_test', 'titles_test',
+                'burrows_delta'
+            ])
+            .sort('burrows_delta')
         )
+
+
+    @property
+    def document_deltas(self) -> pl.DataFrame:
+        '''
+        Returns a DataFrame with the burrows deltas between every pair of
+        documents in the source and reference corpora.'''
+        if self._document_deltas is None:
+            self._document_deltas = self._calculate_burrows_delta()
+
+        return self._document_deltas
+
+
+        
+    

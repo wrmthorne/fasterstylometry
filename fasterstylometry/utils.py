@@ -1,3 +1,3 @@
 
 
-META_COLS = ['index', 'authors', 'books', 'texts', 'tokens']
+META_COLS = ['index', 'authors', 'titles', 'texts', 'tokens']
