@@ -148,10 +148,9 @@ Wood, T. A. (2024). Fast Stylometry (Computer software) (Version 1.0.4) [Compute
 
 
 ## TODO
-- [ ] add parquet caching for large datasets that exceed memory
+- [ ] Add parquet caching for large datasets that exceed memory
 - [ ] Fix lazy evaluation of dataframes
 - [ ] Unit tests
-- [ ] Add 
 - [ ] Finish README
 - [ ] CI/CD
 - [ ] Setup on PyPi
