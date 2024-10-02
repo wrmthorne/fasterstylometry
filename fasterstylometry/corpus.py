@@ -138,3 +138,136 @@ class Corpus:
             self._unique_tokens = set(self.z_scores.columns) - set(META_COLS)
 
         return self._unique_tokens
+    
+
+class LazyCorpus:
+    def __init__(
+        self,
+        authors: list[str] = [],
+        titles: list[str] = [],
+        texts: list[str] = [],
+        config: CorpusConfig = CorpusConfig()
+    ):
+        self.lf = pl.LazyFrame({
+            'index': [str(uuid4()) for _ in range(len(authors))],
+            'authors': authors,
+            'titles': titles,
+            'texts': texts,
+        })
+        self.config = config
+        self._tokenised = False
+        self._top_k_tokens = None
+        self._token_stats = None
+        self._z_scores = None
+
+    def _tokenise(self):
+        if not self._tokenised:
+            if isinstance(self.config.tokeniser_expr, pl.Expr):
+                self.lf = self.lf.with_columns(self.config.tokeniser_expr.alias('tokens'))
+            elif callable(self.config.tokeniser_expr):
+                self.lf = self.lf.with_columns(
+                    pl.col('texts').map_elements(
+                        self.config.tokeniser_expr,
+                        return_dtype=pl.List(pl.String)
+                    ).alias('tokens')
+                )
+            else:
+                raise ValueError('tokeniser_expr must be a polars expression or a callable.')
+            self._tokenised = True
+
+    def _calculate_token_stats(self):
+        self._tokenise()
+        
+        row_token_counts = (
+            self.lf
+            .select(['index', 'tokens'])
+            .explode('tokens')
+            .filter(
+                ~pl.col('tokens').is_in(self.config.words_to_exclude) &
+                pl.col('tokens').str.contains(self.config.tok_match_pattern)
+            )
+            .group_by(['index', 'tokens'])
+            .agg(pl.len().alias('frequency'))
+        )
+
+        if self._top_k_tokens is None:
+            # Calculate global token statistics
+            self._top_k_tokens = (
+                row_token_counts
+                .group_by('tokens')
+                .agg(pl.sum('frequency').alias('total_frequency'))
+                .sort('total_frequency', descending=True)
+                .limit(self.config.k)
+                .select('tokens')
+            )
+
+        # Remove tokens that are not in the top k
+        self._token_stats = (
+            row_token_counts
+            .join(self._top_k_tokens, on='tokens', how='inner')
+        )
+
+        return self._token_stats
+
+    def _calculate_z_scores(self):
+        if self._z_scores is None:
+            if self._token_stats is None:
+                self._calculate_token_stats()
+            
+            # Calculate mean and std dev for each token across all documents
+            token_stats = (
+                self._token_stats
+                .group_by('tokens')
+                .agg([
+                    pl.mean('frequency').alias('mean_freq'),
+                    pl.std('frequency').alias('std_freq')
+                ])
+            )
+
+            print(self._token_stats.collect())
+
+            # Calculate z-scores
+            self._z_scores = (
+                self._token_stats
+                .join(token_stats, on='tokens')
+                .group_by('index', 'tokens', maintain_order=True)
+                .agg(
+                    ((pl.col('frequency') - pl.col('mean_freq')) / pl.col('std_freq'))
+                    .fill_nan(0)
+                    .alias('z_score')
+                )
+                .select(['index', 'tokens', 'z_score'])
+            )
+
+            # temp = (
+            #     self._token_stats
+            #     .select('index', 'tokens', 'frequency')
+            #     )
+            # )
+
+        return self._z_scores
+
+    @property
+    def top_k_tokens(self) -> pl.LazyFrame: 
+        if self._top_k_tokens is None:
+            self._calculate_token_stats()
+        return self._top_k_tokens
+
+    @top_k_tokens.setter
+    def top_k_tokens(self, value: pl.LazyFrame):
+        if isinstance(value, pl.LazyFrame):
+            self._top_k_tokens = value
+        else:
+            raise ValueError("top_k_tokens must be a LazyFrame")
+
+    @property
+    def z_scores(self) -> pl.LazyFrame:
+        if self._z_scores is None:
+            self._calculate_z_scores()
+        return self._z_scores
+
+    @property
+    def token_stats(self) -> pl.LazyFrame:
+        if self._token_stats is None:
+            self._calculate_token_stats()
+        return self._token_stats

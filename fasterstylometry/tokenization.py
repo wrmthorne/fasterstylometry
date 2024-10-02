@@ -16,7 +16,8 @@ tokenise_remove_pronouns_en = (
     .str.extract_all('\w+')
     .list.eval(
         pl.element().filter(
-            ~pl.element().is_in(PRONOUNS) | ~pl.element().str.contains('.*\d+.*')
-        )
+            (~pl.element().is_in(PRONOUNS)) & (~pl.element().str.contains('\d'))
+        ),
+        parallel=True
     )
 )
