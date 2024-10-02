@@ -3,6 +3,7 @@ import logging
 import polars as pl
 
 from .corpus import Corpus, LazyCorpus
+from .utils import DeltaConfig
 
 
 logger = logging.getLogger(__name__)
@@ -26,15 +27,11 @@ class BurrowsDelta:
         self,
         train_corpus: Corpus,
         test_corpus: Corpus,
-        vocab_size: int = 500,
-        words_to_exclude: set = {},
-        tok_match_pattern: str = r'^[a-z][a-z]+$'
+        config: DeltaConfig = DeltaConfig(),
     ):
         self.train_corpus = train_corpus
         self.test_corpus = test_corpus
-        self.vocab_size = vocab_size
-        self.words_to_exclude = words_to_exclude
-        self.tok_match_pattern = tok_match_pattern
+        self.config = config # TODO: Share this with the corpora somehow
 
         self._document_deltas = None
 
@@ -50,33 +47,31 @@ class BurrowsDelta:
             .difference({'index', 'authors', 'titles'})
         )
         
-        # result = (
-        #     self.train_corpus.z_scores
-        #     .select(['index', 'authors', 'titles', *common_tokens])
-        #     .join(
-        #         self.test_corpus.z_scores.select(['index', 'authors', 'titles', *common_tokens]),
-        #         how='cross',
-        #         suffix='_test'
-        #     )
-        # )
+        result = (
+            self.train_corpus.z_scores
+            .select(['index', 'authors', 'titles', *common_tokens])
+            .join(
+                self.test_corpus.z_scores.select(['index', 'authors', 'titles', *common_tokens]),
+                how='cross',
+                suffix='_test'
+            )
+        )
 
-        return self.test_corpus.z_scores.sort('index')
-
-        # return (
-        #     result
-        #     .with_columns([
-        #         (pl.col(token) - pl.col(f'{token}_test')).abs().alias(f'delta_{token}')
-        #         for token in common_tokens
-        #     ])
-        #     .with_columns([
-        #         pl.mean_horizontal(pl.col('^delta_.*$')).alias('burrows_delta')
-        #     ])
-        #     .select([
-        #         'index', 'authors', 'titles', 'index_test', 'authors_test', 'titles_test',
-        #         'burrows_delta'
-        #     ])
-        #     .sort('burrows_delta')
-        # )
+        return (
+            result
+            .with_columns([
+                (pl.col(token) - pl.col(f'{token}_test')).abs().alias(f'delta_{token}')
+                for token in common_tokens
+            ])
+            .with_columns([
+                pl.mean_horizontal(pl.col('^delta_.*$')).alias('burrows_delta')
+            ])
+            .select([
+                'index', 'authors', 'titles', 'index_test', 'authors_test', 'titles_test',
+                'burrows_delta'
+            ])
+            .sort('burrows_delta')
+        )
 
 
     @property
@@ -108,24 +103,13 @@ class LazyBurrowsDelta:
         self,
         train_corpus: 'LazyCorpus',
         test_corpus: 'LazyCorpus',
-        vocab_size: int = 500,
-        words_to_exclude: set[str] = set(),
-        tok_match_pattern: str = r'^[a-z][a-z]+$'
+        config: DeltaConfig = DeltaConfig(),
     ):
         self.train_corpus = train_corpus
         self.test_corpus = test_corpus
-        self.vocab_size = vocab_size
-        self.words_to_exclude = words_to_exclude
-        self.tok_match_pattern = tok_match_pattern
-        self._document_deltas = None
+        self.config = config
 
-        # Update corpus configurations
-        self.train_corpus.config.k = self.vocab_size
-        self.train_corpus.config.words_to_exclude = self.words_to_exclude
-        self.train_corpus.config.tok_match_pattern = self.tok_match_pattern
-        self.test_corpus.config.k = self.vocab_size
-        self.test_corpus.config.words_to_exclude = self.words_to_exclude
-        self.test_corpus.config.tok_match_pattern = self.tok_match_pattern
+        self._document_deltas = None
 
         # Set top_k tokens from train corpus to test corpus
         self.test_corpus.top_k_tokens = self.train_corpus.top_k_tokens
@@ -138,28 +122,8 @@ class LazyBurrowsDelta:
         train_z_scores = self.train_corpus.z_scores
         test_z_scores = self.test_corpus.z_scores
 
-        # Get common tokens
-        common_tokens = (
-            pl.concat([train_z_scores, test_z_scores])
-            .select('tokens')
-            .unique()
-            .sort('tokens')
-        )
+        print(train_z_scores.collect())
 
-        # Prepare train and test DataFrames
-        train_df = (
-            train_z_scores
-            .join(common_tokens, on='tokens', how='inner')
-            .sort(['index', 'tokens'])
-        )
-
-        test_df = (
-            test_z_scores
-            .join(common_tokens, on='tokens', how='inner')
-            .sort(['index', 'tokens'])
-        )
-
-        return test_df.sort('index').collect()
 
         # return (
         #     train_df
@@ -205,3 +169,4 @@ class LazyBurrowsDelta:
         if self._document_deltas is None:
             self._document_deltas = self._calculate_burrows_delta()
         return self._document_deltas
+    

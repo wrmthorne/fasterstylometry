@@ -1,32 +1,8 @@
-from dataclasses import dataclass, field
-from typing import Callable
 from uuid import uuid4
 
 import polars as pl
 
-from .tokenization import tokenise_remove_pronouns_en
-from .utils import META_COLS
-
-
-
-@dataclass
-class CorpusConfig:
-    k: int = field(
-        default=500,
-        metadata={'help': 'The size of the vocabulary to use in the analysis.'}
-    )
-    words_to_exclude: set[str] = field(
-        default_factory=set,
-        metadata={'help': 'A set of words to discard during analysis.'}
-    )
-    tok_match_pattern: str = field(
-        default=r'^[a-z][a-z]+$',
-        metadata={'help': 'A regular expression pattern to match tokens.'}
-    )
-    tokeniser_expr: pl.Expr | Callable[[str], list[str]] = field(
-        default_factory=lambda: tokenise_remove_pronouns_en,
-        metadata={'help': 'A function to tokenise the texts.'}
-    )
+from .utils import DeltaConfig, META_COLS
 
 
 class Corpus:
@@ -35,7 +11,8 @@ class Corpus:
             authors: list[str] = [],
             titles: list[str] = [],
             texts: list[str] = [],
-            config: CorpusConfig = CorpusConfig()
+            config: DeltaConfig = DeltaConfig
+        ()
     ):
         self.df = pl.DataFrame({
             'index': [str(uuid4()) for _ in range(len(authors))],
@@ -146,7 +123,8 @@ class LazyCorpus:
         authors: list[str] = [],
         titles: list[str] = [],
         texts: list[str] = [],
-        config: CorpusConfig = CorpusConfig()
+        config: DeltaConfig = DeltaConfig
+    ()
     ):
         self.lf = pl.LazyFrame({
             'index': [str(uuid4()) for _ in range(len(authors))],
@@ -173,113 +151,81 @@ class LazyCorpus:
                 )
             else:
                 raise ValueError('tokeniser_expr must be a polars expression or a callable.')
+            
+            # Always go through and remove excluded tokens and check pattern match
+            self.lf = (
+                self.lf.select([
+                    pl.col('*'), pl.col('tokens')
+                    .list.eval(pl.element().filter(
+                        ~pl.element().is_in(self.config.words_to_exclude) &
+                        pl.element().str.contains(self.config.tok_match_pattern)))
+                ])
+            )
+
             self._tokenised = True
 
     def _calculate_token_stats(self):
         self._tokenise()
 
-        # filtered_tokens = (
-        #     .group_by('tokens')
-        # )
-
-        row_token_counts = (
+        # Calculate token frequency per row
+        row_token_freqs = (
             self.lf
             .explode('tokens')
-            .filter(
-                ~pl.col('tokens').is_in(self.config.words_to_exclude) &
-                pl.col('tokens').str.contains(self.config.tok_match_pattern)
-            )
             .group_by(['index', 'tokens'])
-            .agg([
-                pl.len().alias('frequency')
-            ])
-            .with_columns((
-                    (pl.col('frequency') - pl.mean('frequency').over('tokens'))
-                    / pl.std('frequency').over('tokens')
-                ).alias('z_score')
-            ).collect()
+            .agg(pl.len().alias('frequency'))
         )
 
-        print(row_token_counts)
-
+        # Calculate top K tokens across the corpus if one wasn't provided
+        # in the case this is a test corpus
         if self._top_k_tokens is None:
-            # Calculate global token statistics
             self._top_k_tokens = (
-                row_token_counts
+                row_token_freqs
                 .group_by('tokens')
-                .agg(pl.sum('frequency').alias('total_frequency'))
-                .sort('total_frequency', descending=True)
-                .limit(self.config.k)
+                .agg(pl.sum('frequency').alias('token_freqs'))
+                .sort('token_freqs', descending=True)
+                .limit(500)
                 .select('tokens')
             )
 
-        # Remove tokens that are not in the top k
-        self._token_stats = (
-            row_token_counts
+        z_scores = (
+            row_token_freqs
             .join(self._top_k_tokens, on='tokens', how='inner')
+            .select([
+                pl.col('*'),
+                (pl.col('frequency') - pl.mean('frequency').over('tokens')
+                    / pl.std('frequency').over('tokens')).alias('z_score')
+            ])
         )
 
-        return self._token_stats
+        self._z_scores = (
+            self.lf
+            .select('index', 'authors', 'titles')
+            .join(z_scores, on='index', how='left')
+        )
 
-    def _calculate_z_scores(self):
-        if self._z_scores is None:
-            if self._token_stats is None:
-                self._calculate_token_stats()
-            
-            # Calculate mean and std dev for each token across all documents
-            token_stats = (
-                self._token_stats
-                .group_by('tokens')
-                .agg([
-                    pl.mean('frequency').alias('mean_freq'),
-                    pl.std('frequency').alias('std_freq')
-                ])
-            )
-
-            print(self._token_stats.collect())
-
-            # Calculate z-scores
-            self._z_scores = (
-                self._token_stats
-                .join(token_stats, on='tokens')
-                .group_by('index', 'tokens', maintain_order=True)
-                .agg(
-                    ((pl.col('frequency') - pl.col('mean_freq')) / pl.col('std_freq'))
-                    .fill_nan(0)
-                    .alias('z_score')
-                )
-                .select(['index', 'tokens', 'z_score'])
-            )
-
-            # temp = (
-            #     self._token_stats
-            #     .select('index', 'tokens', 'frequency')
-            #     )
-            # )
-
-        return self._z_scores
+    def clear_cache(self) -> None:
+        self._top_k_tokens = None
+        self._z_scores = None
+        self._tokenised = False
+        self.lf = self.lf.drop('tokens', strict=False)
 
     @property
-    def top_k_tokens(self) -> pl.LazyFrame: 
+    def top_k_tokens(self) -> (pl.LazyFrame | pl.DataFrame): 
         if self._top_k_tokens is None:
             self._calculate_token_stats()
         return self._top_k_tokens
 
     @top_k_tokens.setter
-    def top_k_tokens(self, value: pl.LazyFrame):
-        if isinstance(value, pl.LazyFrame):
+    def top_k_tokens(self, value: (pl.LazyFrame | pl.DataFrame)):
+        if isinstance(value, (pl.LazyFrame | pl.DataFrame)):
+            self.clear_cache()
             self._top_k_tokens = value
         else:
-            raise ValueError("top_k_tokens must be a LazyFrame")
+            raise ValueError('top_k_tokens must be a either a DataFrame or '
+                             'preferably a LazyFrame.')
 
     @property
-    def z_scores(self) -> pl.LazyFrame:
+    def z_scores(self) -> (pl.LazyFrame | pl.DataFrame):
         if self._z_scores is None:
-            self._calculate_z_scores()
-        return self._z_scores
-
-    @property
-    def token_stats(self) -> pl.LazyFrame:
-        if self._token_stats is None:
             self._calculate_token_stats()
-        return self._token_stats
+        return self._z_scores
