@@ -138,7 +138,7 @@ class Corpus:
             self._unique_tokens = set(self.z_scores.columns) - set(META_COLS)
 
         return self._unique_tokens
-    
+
 
 class LazyCorpus:
     def __init__(
@@ -177,18 +177,30 @@ class LazyCorpus:
 
     def _calculate_token_stats(self):
         self._tokenise()
-        
+
+        # filtered_tokens = (
+        #     .group_by('tokens')
+        # )
+
         row_token_counts = (
             self.lf
-            .select(['index', 'tokens'])
             .explode('tokens')
             .filter(
                 ~pl.col('tokens').is_in(self.config.words_to_exclude) &
                 pl.col('tokens').str.contains(self.config.tok_match_pattern)
             )
             .group_by(['index', 'tokens'])
-            .agg(pl.len().alias('frequency'))
+            .agg([
+                pl.len().alias('frequency')
+            ])
+            .with_columns((
+                    (pl.col('frequency') - pl.mean('frequency').over('tokens'))
+                    / pl.std('frequency').over('tokens')
+                ).alias('z_score')
+            ).collect()
         )
+
+        print(row_token_counts)
 
         if self._top_k_tokens is None:
             # Calculate global token statistics
