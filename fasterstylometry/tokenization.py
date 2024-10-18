@@ -10,7 +10,7 @@ PRONOUNS = {
 
 # Default tokeniser 
 tokenise_remove_pronouns_en = (
-    pl.col('texts')
+    pl.col('text')
     .str.to_lowercase()
     .str.replace_all("[`']", '')
     .str.extract_all('\w+')
