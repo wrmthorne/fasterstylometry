@@ -44,3 +44,31 @@ class BurrowsDelta:
             .sort('burrows_delta', descending=False)
         )
         return document_deltas.collect()
+    
+    @property
+    def author_deltas(self) -> pl.DataFrame:
+        raw_author_deltas = (
+            self.train_corpus.z_scores
+            .group_by(['author', 'tokens'])
+            .agg(pl.mean('z_score').alias('mean_author_token_z_score'))
+            .join(self.test_corpus.z_scores, on='tokens', how='inner', suffix='_test')
+            .with_columns(
+                pl.col('author').alias('author_train'),
+                (pl.col('z_score') - pl.col('mean_author_token_z_score')).abs().alias('delta')
+            )
+            .group_by(['index', 'author_train', 'title', 'author_test'])
+            .agg(pl.mean('delta').alias('burrows_delta'))
+        )
+
+        author_deltas = (
+            raw_author_deltas
+            .collect()
+            .pivot(
+                values='burrows_delta',
+                index='author_train',
+                on=['index', 'title', 'author_test'],
+                aggregate_function='first'
+            )
+        )
+
+        return author_deltas

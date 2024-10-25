@@ -1,3 +1,4 @@
+from pathlib import Path
 from uuid import uuid4
 
 import polars as pl
@@ -6,7 +7,7 @@ from .tokenization import tokenise_remove_pronouns_en
 
 
 class Corpus:
-    def __init__(self, authors=[], titles=[], texts=[], top_k_tokens=None, tokenise_expr=tokenise_remove_pronouns_en):
+    def __init__(self, authors: list[str] = [], titles: list[str] = [], texts: list[str] = [], *, top_k_tokens: pl.LazyFrame | None = None, tokenise_expr: pl.Expr = tokenise_remove_pronouns_en, vocab_size: int = 500):
         self._lf = pl.LazyFrame({
             'index': [str(uuid4()) for _ in range(len(authors))],
             'author': authors,
@@ -31,7 +32,7 @@ class Corpus:
                 .group_by('tokens')
                 .agg(pl.sum('frequency').alias('token_freqs'))
                 .sort('token_freqs', descending=True)
-                .limit(500)
+                .limit(vocab_size)
                 .select('tokens')
             )
 
@@ -48,3 +49,25 @@ class Corpus:
                 .alias('z_score')
             ])
         )
+
+    @classmethod
+    def from_dir(self, path: str, **kwargs) -> 'Corpus':
+        path = Path(path)
+        files = path.glob('**/*_-_*.txt')
+
+        docs = {'authors': [], 'titles': [], 'texts': []}
+
+        for file in files:
+            author, title = file.stem.split('_-_')
+            author = author.replace('_', ' ')
+            title = title.replace('_', ' ')
+
+            with open(file, 'r') as f:
+                text = f.read()
+
+            docs['authors'].append(author)
+            docs['titles'].append(title)
+            docs['texts'].append(text)
+
+        return Corpus(**docs, **kwargs)
+        
