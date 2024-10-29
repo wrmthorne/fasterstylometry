@@ -4,7 +4,7 @@
 
 ![my badge](https://badgen.net/badge/Status/In%20Development/orange)
 
-[![PyPI package](https://img.shields.io/badge/pip%20install-fasterstylometry-brightgreen)](https://pypi.org/project/fasterstylometry/) [![version number](https://img.shields.io/pypi/v/fasterstylometry?color=green&label=version)](https://github.com/wrmthorne/fasterdatascience/releases) [![License](https://img.shields.io/github/license/wrmthorne/fasterstylometry)](https://github.com/wrmthorne/fasterstylometry/blob/main/LICENSE)
+[![PyPI package](https://img.shields.io/badge/pip%20install-fasterstylometry-brightgreen)](https://pypi.org/project/fasterstylometry/) [![version number](https://img.shields.io/pypi/v/fasterstylometry?color=green&label=version)](https://github.com/wrmthorne/fasterstylometry/releases) [![License](https://img.shields.io/github/license/wrmthorne/fasterstylometry)](https://github.com/wrmthorne/fasterstylometry/blob/main/LICENSE)
 
 <!-- badges: end -->
 
